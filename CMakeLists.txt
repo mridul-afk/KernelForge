@@ -13,10 +13,11 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # RTX 3050 = Compute Capability 8.6
 set(CMAKE_CUDA_ARCHITECTURES 86)
 
-add_executable(cuda_test
-  tests/cuda_test.cu
+add_executable(matmul_benchmark
+  benchmark/runner.cu
+  kernels/matmul/baseline.cu
 )
 
-set_target_properties(cuda_test PROPERTIES
+set_target_properties(matmul_benchmark PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
 )
