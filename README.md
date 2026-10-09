@@ -1,86 +1,85 @@
 # KernelForge
 
 **KernelForge** is an experimental AI-assisted GPU kernel optimization system.
-
-The goal is to automatically improve CUDA kernels through an iterative loop of:
+An LLM proposes CUDA kernels; a hardened harness compiles, verifies, benchmarks
+and profiles them; the results go back to the LLM for the next attempt.
 
 ```text
-CUDA Kernel
-    ↓
-Compile
-    ↓
-Correctness Check
-    ↓
-Benchmark
-    ↓
-Profile
-    ↓
-AI Analysis
-    ↓
-Optimized Kernel
-    ↓
-Repeat
+CUDA kernel -> Compile -> Correctness (many shapes) -> Benchmark vs cuBLAS
+     ^                                                        |
+     |                                                        v
+Optimized kernel  <-  AI analysis  <-  Profile / failure report
 ```
 
-Current Status
+## Status
 
-🚧 Early development
+Early development. Working today:
 
-Currently implemented:
+- FP32 tiled matmul baseline (`kernels/matmul/baseline.cu`)
+- Benchmark runner emitting machine-readable JSON
+- Correctness on 7 shapes (incl. non-tile-multiple sizes), double-precision CPU reference
+- NaN-poisoned output buffers and a post-benchmark re-check (catches races / unwritten outputs)
+- Median/min/mean/stddev timing and GFLOPS, compared against cuBLAS
+- `agent/evaluate.py`: builds and runs a candidate in its own process with timeouts
 
-CUDA + CMake project
-FP32 tiled matrix multiplication baseline
-GPU execution on NVIDIA GPUs
-CPU reference implementation
-Full correctness validation
-CUDA event-based benchmarking
-Support for custom matrix dimensions
+Not yet built: Nsight Compute profiling, Nemotron integration, the optimization loop, dashboard.
 
-Current baseline:
+## Kernel contract
 
-GPU: NVIDIA RTX 3050 8GB
-CUDA: 13.0
-Architecture: sm_86
-Tile size: 16 × 16
+A candidate is **one `.cu` file** exporting:
 
-Example benchmark:
+```cpp
+extern "C" cudaError_t kernelforge_launch(
+    const float *A, const float *B, float *C,   // row-major: A MxK, B KxN, C MxN
+    int M, int N, int K, cudaStream_t stream);
+```
 
-Matrix A: 512 × 1024
-Matrix B: 1024 × 512
-Matrix C: 512 × 512
+The file owns tile size, block/grid shape, shared memory and coarsening; the
+runner knows none of it. Rules the agent must follow: FP32 results within
+tolerance, no cuBLAS/cuDNN calls, no host-side compute, launch asynchronously
+on `stream`.
 
-Correctness: PASS
-Average kernel latency: 1.052181 ms
-Project Structure
-KernelForge/
-├── kernels/
-│   └── matmul/
-│       └── baseline.cu
-├── benchmark/
-│   └── runner.cu
-├── tests/
-│   └── cuda_test.cu
-├── agent/
-├── experiments/
-└── CMakeLists.txt
-Build
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+## Evaluate a candidate
+
+```bash
+python agent/evaluate.py kernels/matmul/baseline.cu            # perf shape 2048^3
+python agent/evaluate.py kernels/matmul/baseline.cu 4096 4096 4096
+```
+
+Needs `nvcc` on PATH. `KERNELFORGE_ARCH` overrides `-arch` (default `native`;
+e.g. `KERNELFORGE_ARCH=sm_90` for a Hopper box).
+
+Output is one JSON object. `status` is one of `ok`, `compile_error`,
+`incorrect`, `runtime_error`, `timeout`, `crash`, `setup_error`. On `ok`:
+
+```json
+{
+  "status": "ok",
+  "correctness": {"passed": true, "cases": [ ... ]},
+  "kernel": {"median_ms": 0, "min_ms": 0, "mean_ms": 0, "stddev_ms": 0, "gflops": 0},
+  "cublas": { ... },
+  "percent_of_cublas": 0
+}
+```
+
+## CMake build (Linux or Windows)
+
+```bash
+cmake -S . -B build
 cmake --build build --config Release --target matmul_benchmark
+./build/matmul_benchmark            # Windows: .\build\Release\matmul_benchmark.exe
+```
 
-Run:
+`-DKERNELFORGE_CUDA_ARCH=86` pins the architecture, `-DKERNEL_SRC=...` selects a candidate.
 
-.\build\Release\matmul_benchmark.exe
-Roadmap
- CUDA benchmark infrastructure
- Correctness validation
- Baseline performance measurement
- JSON benchmark results
- GPU profiling
- Nemotron integration
- Automatic kernel generation
- Autonomous optimization loop
- User-provided CUDA kernel optimization
+## Roadmap
 
-KernelForge — An Autonomous GPU Optimization Laboratory
-
-This is the version I'd put in the repo **right now**. It documents the working system without making the project look more complete than it currently is.
+- [x] CUDA benchmark infrastructure
+- [x] Multi-shape correctness validation
+- [x] JSON benchmark results
+- [x] Baseline vs cuBLAS
+- [ ] GPU profiling (Nsight Compute metrics into the report)
+- [ ] Nemotron integration (Nebius Token Factory)
+- [ ] Autonomous optimization loop
+- [ ] Dashboard
+- [ ] Second kernel family (softmax / reduction)

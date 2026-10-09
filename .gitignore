@@ -1,2 +1,7 @@
 *.exe
 /build
+__pycache__
+# Temporary kernel evaluation failure tests
+kernels/matmul/incorrect.cu
+kernels/matmul/compile_fail.cu
+kernels/matmul/runtime_fail.cu

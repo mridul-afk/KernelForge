@@ -1,21 +1,31 @@
 #include <cuda_runtime.h>
 
-#define TILE_SIZE 16
-
 // KernelForge baseline: tiled FP32 matrix multiplication.
 //
-// A: M x K
-// B: K x N
-// C: M x N
+//   A: M x K   (row-major)
+//   B: K x N   (row-major)
+//   C: M x N   (row-major)
 //
-// Launch configuration:
-//   Threads per block: (TILE_SIZE, TILE_SIZE)
-//   Blocks per grid:   (ceil(N / TILE_SIZE), ceil(M / TILE_SIZE))
+// KERNEL CONTRACT
+// ---------------
+// A candidate kernel file must export exactly one host entry point:
+//
+//   extern "C" cudaError_t kernelforge_launch(
+//       const float *A, const float *B, float *C,
+//       int M, int N, int K, cudaStream_t stream);
+//
+// The file owns EVERYTHING about how the kernel runs: tile size, block shape,
+// grid shape, shared memory size, thread coarsening. The benchmark runner knows
+// nothing about them, so any of them can change freely without touching the
+// runner. The entry point must launch asynchronously on `stream` and return
+// cudaGetLastError().
 
-extern "C" __global__ void kernel(
-    const float *A,
-    const float *B,
-    float *C,
+#define TILE_SIZE 16
+
+__global__ void matmul_kernel(
+    const float *__restrict__ A,
+    const float *__restrict__ B,
+    float *__restrict__ C,
     int M,
     int N,
     int K)
@@ -43,7 +53,7 @@ extern "C" __global__ void kernel(
     // Cooperatively load a tile of A.
     if (row < M && a_col < K)
     {
-      tile_A[ty][tx] = A[row * K + a_col];
+      tile_A[ty][tx] = A[(size_t)row * K + a_col];
     }
     else
     {
@@ -53,7 +63,7 @@ extern "C" __global__ void kernel(
     // Cooperatively load a tile of B.
     if (b_row < K && col < N)
     {
-      tile_B[ty][tx] = B[b_row * N + col];
+      tile_B[ty][tx] = B[(size_t)b_row * N + col];
     }
     else
     {
@@ -77,6 +87,26 @@ extern "C" __global__ void kernel(
   // Store the result if this thread maps to a valid output element.
   if (row < M && col < N)
   {
-    C[row * N + col] = acc;
+    C[(size_t)row * N + col] = acc;
   }
+}
+
+extern "C" cudaError_t kernelforge_launch(
+    const float *A,
+    const float *B,
+    float *C,
+    int M,
+    int N,
+    int K,
+    cudaStream_t stream)
+{
+  const dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
+  const dim3 blocksPerGrid(
+      (N + TILE_SIZE - 1) / TILE_SIZE,
+      (M + TILE_SIZE - 1) / TILE_SIZE);
+
+  matmul_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+      A, B, C, M, N, K);
+
+  return cudaGetLastError();
 }
